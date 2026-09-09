@@ -6,6 +6,7 @@ import base64
 from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager, contextmanager
 from datetime import timedelta
+from pathlib import Path
 from typing import Any
 
 import grpc
@@ -72,6 +73,8 @@ class ArmadaClusterConfig(Block):
         host: The hostname of the Armada server's gRPC endpoint
         port: The port of the Armada server's gRPC endpoint
         disable_ssl: Whether to connect without TLS
+        root_certificates: PEM root certificates verifying Armada's TLS certificate
+        root_certificates_path: Path to a PEM file of root certificates
         binoculars_host: The hostname of Armada's Binoculars endpoint
         binoculars_port: The port of Armada's Binoculars endpoint
 
@@ -103,8 +106,19 @@ class ArmadaClusterConfig(Block):
         default=None,
         description=(
             "PEM-encoded root certificates used to verify the Armada server's "
-            "TLS certificate. If not provided, gRPC's default roots are used."
+            "TLS certificate. Takes precedence over `root_certificates_path`. "
+            "If neither is provided, gRPC's default roots are used."
         ),
+    )
+    root_certificates_path: Path | None = Field(
+        default=None,
+        description=(
+            "Path to a PEM file holding the root certificates used to verify the "
+            "Armada server's TLS certificate. The file is read when a channel is "
+            "opened, so it must be readable by the worker. Ignored when "
+            "`root_certificates` is set."
+        ),
+        examples=["/etc/prefect/armada/ca.crt"],
     )
     binoculars_host: str | None = Field(
         default=None,
@@ -154,6 +168,8 @@ class ArmadaClusterConfig(Block):
             host=connection.host,
             port=connection.port,
             disable_ssl=connection.disable_ssl,
+            root_certificates=connection.root_certificates,
+            root_certificates_path=connection.root_certificates_path,
             binoculars_host=connection.binoculars_host,
             binoculars_port=connection.binoculars_port,
         )
@@ -178,6 +194,27 @@ class ArmadaClusterConfig(Block):
         options.extend(self.channel_options.items())
         return options
 
+    def _resolve_root_certificates(self) -> bytes | None:
+        """
+        Returns the PEM root certificates to verify Armada's TLS certificate.
+
+        Inline `root_certificates` take precedence over `root_certificates_path`.
+        Returns `None` when neither is set, in which case gRPC's default roots
+        are used.
+        """
+        if self.root_certificates:
+            return self.root_certificates.get_secret_value().encode()
+        if self.root_certificates_path is None:
+            return None
+
+        path = Path(self.root_certificates_path).expanduser()
+        try:
+            return path.read_bytes()
+        except OSError as exc:
+            raise ValueError(
+                f"Could not read Armada root certificates from {path}: {exc}"
+            ) from exc
+
     def get_channel_credentials(
         self, call_credentials: grpc.CallCredentials | None = None
     ) -> grpc.ChannelCredentials | None:
@@ -200,12 +237,12 @@ class ArmadaClusterConfig(Block):
             # local channel credentials are used to carry them, matching the
             # pattern in Armada's own client examples.
             channel_credentials = grpc.local_channel_credentials()
-        elif self.root_certificates:
-            channel_credentials = grpc.ssl_channel_credentials(
-                root_certificates=self.root_certificates.get_secret_value().encode()
-            )
         else:
-            channel_credentials = grpc.ssl_channel_credentials()
+            # `ssl_channel_credentials` falls back to gRPC's default roots when
+            # `root_certificates` is None.
+            channel_credentials = grpc.ssl_channel_credentials(
+                root_certificates=self._resolve_root_certificates()
+            )
 
         if call_credentials is None:
             return channel_credentials

@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 from prefect_armada.settings import (
     ArmadaSettings,
@@ -105,3 +107,35 @@ def test_max_retries_must_be_positive(monkeypatch: pytest.MonkeyPatch):
     )
     with pytest.raises(ValueError):
         ArmadaWorkerSubmitJobRetrySettings()
+
+
+def test_root_certificates_path_from_environment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    ca_file = tmp_path / "ca.crt"
+    monkeypatch.setenv(
+        "PREFECT_INTEGRATIONS_ARMADA_CONNECTION_ROOT_CERTIFICATES_PATH", str(ca_file)
+    )
+
+    assert ArmadaSettings().connection.root_certificates_path == ca_file
+
+
+def test_root_certificates_honor_the_armada_tooling_variable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    ca_file = tmp_path / "ca.crt"
+    monkeypatch.setenv("ARMADA_ROOT_CERTIFICATES_PATH", str(ca_file))
+
+    assert ArmadaSettings().connection.root_certificates_path == ca_file
+
+
+def test_root_certificates_are_a_secret(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv(
+        "PREFECT_INTEGRATIONS_ARMADA_CONNECTION_ROOT_CERTIFICATES", "a-pem-blob"
+    )
+
+    root_certificates = ArmadaSettings().connection.root_certificates
+
+    assert root_certificates is not None
+    assert root_certificates.get_secret_value() == "a-pem-blob"
+    assert "a-pem-blob" not in str(root_certificates)

@@ -50,6 +50,7 @@ class TestArmadaWorkerJobConfiguration:
             "armada_host",
             "armada_port",
             "armada_disable_ssl",
+            "armada_root_certificates_path",
             "api_dns_name",
             "queue",
             "job_set_id",
@@ -376,6 +377,61 @@ class TestArmadaWorkerJobConfiguration:
 
         assert cluster_config.host == "from-block.example.com"
         assert cluster_config.disable_ssl is False
+
+    async def test_root_certificates_path_comes_from_the_work_pool_variables(
+        self, tmp_path
+    ):
+        ca_file = tmp_path / "ca.crt"
+        ca_file.write_text("-----BEGIN CERTIFICATE-----\nwork-pool\n")
+        configuration = await ArmadaWorkerJobConfiguration.from_template_and_values(
+            ArmadaWorker.get_default_base_job_template(),
+            {
+                "armada_host": "armada.example.com",
+                "armada_root_certificates_path": str(ca_file),
+            },
+        )
+
+        cluster_config = configuration.get_credentials().get_cluster_config()
+
+        assert cluster_config.root_certificates_path == ca_file
+        assert cluster_config._resolve_root_certificates() == (
+            b"-----BEGIN CERTIFICATE-----\nwork-pool\n"
+        )
+
+    def test_root_certificates_path_overrides_the_cluster_config(
+        self, default_configuration, tmp_path
+    ):
+        # A work pool pointed at its own CA must win over inline PEM on a block,
+        # which would otherwise take precedence when the channel is opened.
+        ca_file = tmp_path / "ca.crt"
+        ca_file.write_text("-----BEGIN CERTIFICATE-----\nwork-pool\n")
+        default_configuration.cluster_config = ArmadaClusterConfig(
+            host="from-block.example.com",
+            root_certificates="-----BEGIN CERTIFICATE-----\nfrom-block\n",
+        )
+        default_configuration.armada_root_certificates_path = str(ca_file)
+
+        cluster_config = default_configuration.get_credentials().get_cluster_config()
+
+        assert cluster_config.root_certificates is None
+        assert cluster_config._resolve_root_certificates() == (
+            b"-----BEGIN CERTIFICATE-----\nwork-pool\n"
+        )
+
+    def test_root_certificates_are_not_overridden_when_unset(
+        self, default_configuration
+    ):
+        default_configuration.cluster_config = ArmadaClusterConfig(
+            host="from-block.example.com",
+            root_certificates="-----BEGIN CERTIFICATE-----\nfrom-block\n",
+        )
+        default_configuration.armada_host = "armada.example.com"
+
+        cluster_config = default_configuration.get_credentials().get_cluster_config()
+
+        assert cluster_config._resolve_root_certificates() == (
+            b"-----BEGIN CERTIFICATE-----\nfrom-block\n"
+        )
 
     def test_disable_ssl_is_not_overridden_when_unset(self, default_configuration):
         default_configuration.cluster_config = ArmadaClusterConfig(

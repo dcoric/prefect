@@ -21,6 +21,16 @@ TLS - which is how the armada-operator's quickstart is configured - need
 `armada_disable_ssl` set, or the worker's TLS handshake fails with
 `WRONG_VERSION_NUMBER`.
 
+A server whose certificate is privately issued, by an internal or cluster-local
+CA, needs the issuing CA supplied with `armada_root_certificates_path`, a path
+on the worker's host; gRPC's default roots only trust publicly-issued
+certificates. gRPC matches that certificate's Subject Alternative Name against
+`armada_host`, so a certificate issued for an in-cluster service name fails when
+the worker dials `localhost` unless `grpc.ssl_target_name_override` is set in an
+`ArmadaClusterConfig`'s `channel_options`. Armada does not support mutual TLS,
+so a client certificate has no role here; authenticate with a token or basic
+auth on an `ArmadaCredentials` block.
+
 When none is set, and the work pool does not reference an
 `ArmadaClusterConfig` or `ArmadaCredentials` block, connection details are read
 from the environment:
@@ -113,6 +123,7 @@ import enum
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -257,6 +268,8 @@ class ArmadaWorkerJobConfiguration(BaseJobConfiguration):
         armada_host: The hostname or IP address of the Armada server.
         armada_port: The port of the Armada server.
         armada_disable_ssl: Whether to connect to the Armada server without TLS.
+        armada_root_certificates_path: Path to a PEM file of root certificates
+            verifying the Armada server's TLS certificate.
         api_dns_name: The address the Prefect API is reachable at from inside the
             cluster, substituted for a local address in jobs' `PREFECT_API_URL`.
         cluster_config: The Armada cluster configuration to connect with.
@@ -283,6 +296,7 @@ class ArmadaWorkerJobConfiguration(BaseJobConfiguration):
     armada_host: str | None = Field(default=None)
     armada_port: int | None = Field(default=None)
     armada_disable_ssl: bool | None = Field(default=None)
+    armada_root_certificates_path: str | None = Field(default=None)
     api_dns_name: str | None = Field(default=None)
     cluster_config: ArmadaClusterConfig | None = Field(default=None)
     credentials: ArmadaCredentials | None = Field(default=None)
@@ -424,9 +438,10 @@ class ArmadaWorkerJobConfiguration(BaseJobConfiguration):
         credentials block does not carry one of its own. When neither is set,
         connection details are read from the current environment.
 
-        `armada_host`, `armada_port`, and `armada_disable_ssl` override the host,
-        port, and TLS setting of whichever cluster config is used, so a work pool
-        can point at an Armada server without configuring a block.
+        `armada_host`, `armada_port`, `armada_disable_ssl`, and
+        `armada_root_certificates_path` override the host, port, and TLS settings
+        of whichever cluster config is used, so a work pool can point at an
+        Armada server without configuring a block.
         """
         credentials = self._get_block_credentials()
 
@@ -437,6 +452,13 @@ class ArmadaWorkerJobConfiguration(BaseJobConfiguration):
             overrides["port"] = self.armada_port
         if self.armada_disable_ssl is not None:
             overrides["disable_ssl"] = self.armada_disable_ssl
+        if self.armada_root_certificates_path:
+            # The inline PEM on a cluster config takes precedence when resolving,
+            # so it is cleared for this override to take effect.
+            overrides["root_certificates"] = None
+            overrides["root_certificates_path"] = Path(
+                self.armada_root_certificates_path
+            )
         if not overrides:
             return credentials
 
@@ -733,6 +755,20 @@ class ArmadaWorkerVariables(BaseVariables):
             "armada-operator serve gRPC without TLS, so they need this enabled."
         ),
         examples=[True],
+    )
+    armada_root_certificates_path: str | None = Field(
+        default=None,
+        title="TLS Root Certificates Path",
+        description=(
+            "Path to a PEM file holding the root certificates that verify the "
+            "Armada server's TLS certificate, for a cluster serving gRPC with a "
+            "privately-issued certificate. The file is read by the worker, so it "
+            "must exist on the worker's host. Overrides the root certificates of "
+            "the cluster config used for job submission. Ignored when TLS is "
+            "disabled. If not set here or on a block, gRPC's default roots are "
+            "used, which only trust publicly-issued certificates."
+        ),
+        examples=["/etc/prefect/armada/ca.crt"],
     )
     api_dns_name: str | None = Field(
         default=None,

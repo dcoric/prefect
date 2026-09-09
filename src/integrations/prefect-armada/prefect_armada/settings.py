@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from functools import partial
+from pathlib import Path
 from typing import Annotated
 
 from pydantic import AliasChoices, AliasPath, BeforeValidator, Field, SecretStr
@@ -51,6 +52,31 @@ class ArmadaConnectionSettings(PrefectBaseSettings):
             # sources filter out unprefixed environment variables that share a
             # name with a field.
             "armada_disable_ssl",
+        ),
+    )
+
+    root_certificates: SecretStr | None = Field(
+        default=None,
+        description="PEM-encoded root certificates used to verify the Armada "
+        "server's TLS certificate. Takes precedence over "
+        "`root_certificates_path`. If neither is set, gRPC's default roots are "
+        "used.",
+        validation_alias=AliasChoices(
+            AliasPath("root_certificates"),
+            "prefect_integrations_armada_connection_root_certificates",
+            "armada_root_certificates",
+        ),
+    )
+
+    root_certificates_path: Path | None = Field(
+        default=None,
+        description="Path to a PEM file holding the root certificates used to "
+        "verify the Armada server's TLS certificate. Ignored when "
+        "`root_certificates` is set.",
+        validation_alias=AliasChoices(
+            AliasPath("root_certificates_path"),
+            "prefect_integrations_armada_connection_root_certificates_path",
+            "armada_root_certificates_path",
         ),
     )
 

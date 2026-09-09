@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import grpc
 import pytest
 from armada_client.asyncio_client import ArmadaAsyncIOClient
@@ -84,6 +86,66 @@ class TestArmadaClusterConfig:
             root_certificates="-----BEGIN CERTIFICATE-----\nnot-a-real-cert\n"
         )
         assert isinstance(config.get_channel_credentials(), grpc.ChannelCredentials)
+
+    def test_root_certificates_are_read_from_a_path(self, tmp_path: Path):
+        pem = "-----BEGIN CERTIFICATE-----\nfrom-a-file\n"
+        ca_file = tmp_path / "ca.crt"
+        ca_file.write_text(pem)
+
+        config = ArmadaClusterConfig(root_certificates_path=ca_file)
+
+        assert config._resolve_root_certificates() == pem.encode()
+        assert isinstance(config.get_channel_credentials(), grpc.ChannelCredentials)
+
+    def test_inline_root_certificates_take_precedence_over_a_path(self, tmp_path: Path):
+        ca_file = tmp_path / "ca.crt"
+        ca_file.write_text("-----BEGIN CERTIFICATE-----\nfrom-a-file\n")
+
+        config = ArmadaClusterConfig(
+            root_certificates="-----BEGIN CERTIFICATE-----\ninline\n",
+            root_certificates_path=ca_file,
+        )
+
+        assert config._resolve_root_certificates() == (
+            b"-----BEGIN CERTIFICATE-----\ninline\n"
+        )
+
+    def test_default_roots_are_used_when_no_certificates_are_configured(self):
+        assert ArmadaClusterConfig()._resolve_root_certificates() is None
+
+    def test_a_missing_root_certificates_file_raises(self, tmp_path: Path):
+        config = ArmadaClusterConfig(root_certificates_path=tmp_path / "absent.crt")
+
+        with pytest.raises(ValueError, match="Could not read Armada root certificates"):
+            config.get_channel_credentials()
+
+    def test_root_certificates_path_is_ignored_when_ssl_is_disabled(
+        self, tmp_path: Path
+    ):
+        # A stale path must not break a plaintext connection, since the file is
+        # never needed for one.
+        config = ArmadaClusterConfig(
+            disable_ssl=True, root_certificates_path=tmp_path / "absent.crt"
+        )
+
+        assert config.get_channel_credentials() is None
+
+    def test_from_env_reads_root_certificates_path(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ):
+        ca_file = tmp_path / "ca.crt"
+        ca_file.write_text("-----BEGIN CERTIFICATE-----\nfrom-env\n")
+        monkeypatch.setenv(
+            "PREFECT_INTEGRATIONS_ARMADA_CONNECTION_ROOT_CERTIFICATES_PATH",
+            str(ca_file),
+        )
+
+        config = ArmadaClusterConfig.from_env()
+
+        assert config.root_certificates_path == ca_file
+        assert config._resolve_root_certificates() == (
+            b"-----BEGIN CERTIFICATE-----\nfrom-env\n"
+        )
 
 
 class TestAuthMetadataPlugins:

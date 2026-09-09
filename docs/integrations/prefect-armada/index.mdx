@@ -72,8 +72,58 @@ also honored.
 
 To share connection details across work pools, or to authenticate, save an `ArmadaClusterConfig` or
 `ArmadaCredentials` block and reference it from the work pool's `cluster_config` or `credentials` job
-variable instead. Blocks take precedence over the environment, and `armada_host`, `armada_port`, and
-`armada_disable_ssl` take precedence over both.
+variable instead. Blocks take precedence over the environment, and `armada_host`, `armada_port`,
+`armada_disable_ssl`, and `armada_root_certificates_path` take precedence over both.
+
+### Connect over TLS
+
+An Armada server serving gRPC with a publicly-issued certificate needs no extra configuration: leave
+`armada_disable_ssl` unset and the worker verifies it against gRPC's default trust roots.
+
+For a privately-issued certificate — one signed by an internal or cluster-local CA, as
+[cert-manager](https://cert-manager.io/) issues — point the worker at the issuing CA. The simplest way
+is in the environment the worker starts in:
+
+```bash
+export PREFECT_INTEGRATIONS_ARMADA_CONNECTION_ROOT_CERTIFICATES_PATH="/etc/prefect/armada/ca.crt"
+prefect worker start --pool my-armada-pool
+```
+
+To set it for every worker on a pool instead, set the `armada_root_certificates_path` job variable as a
+default in the pool's base job template, from the work pool's **Edit** page in the UI or by editing the
+template and applying it with `prefect work-pool update my-armada-pool --base-job-template template.json`.
+
+The worker reads the file when it opens a channel, so use an absolute path that exists on the worker's
+host, not inside the cluster. To carry the certificate in a block instead of on disk, set
+`root_certificates` on an `ArmadaClusterConfig` to the PEM text itself; it takes precedence over any
+path.
+
+<Warning>
+gRPC matches the server's certificate against the **Subject Alternative Name** (SAN), not the Common
+Name, and checks it against the address in `armada_host`. A certificate issued for
+`armada-server.armada.svc.cluster.local` fails when the worker dials `localhost`, even though the CA
+verifies, with `CERTIFICATE_VERIFY_FAILED` or a name-mismatch error.
+
+Either include every address the worker dials in the certificate's SAN list, or override the name gRPC
+matches by setting `channel_options` on an `ArmadaClusterConfig` block:
+
+```python
+ArmadaClusterConfig(
+    host="localhost",
+    port=30002,
+    root_certificates_path="/etc/prefect/armada/ca.crt",
+    channel_options={"grpc.ssl_target_name_override": "armada-server.armada.svc.cluster.local"},
+).save("armada-tls")
+```
+</Warning>
+
+<Note>
+Armada's gRPC API does **not** support mutual TLS: its server config exposes only `enabled`, `certPath`,
+and `keyPath`, and it never requests a client certificate. Authenticate with the `token` or
+`username`/`password` fields on an `ArmadaCredentials` block instead. A client certificate and key — such
+as the ones in a `kubeconfig`, which belong to the Kubernetes API server rather than to Armada — have no
+role here.
+</Note>
 
 ### Let flow-run pods reach the Prefect API
 
@@ -106,6 +156,7 @@ Set these on the work pool, on a deployment, or per flow run to control how jobs
 | `armada_host` | `localhost` | The hostname or IP address of the Armada server's gRPC endpoint. |
 | `armada_port` | `50051` | The port of the Armada server's gRPC endpoint. |
 | `armada_disable_ssl` | `false` | Whether to connect to the Armada server without TLS. |
+| `armada_root_certificates_path` | none | Path on the worker's host to a PEM file of root certificates verifying the Armada server's TLS certificate. Defaults to gRPC's trust roots. |
 | `api_dns_name` | none | The address the Prefect API is reachable at from inside the cluster, substituted for a local address in each job's `PREFECT_API_URL`. |
 | `queue` | `prefect` | The Armada queue to submit jobs to. The queue must already exist. |
 | `job_set_id` | one per flow run | The Armada job set to submit jobs to. |
