@@ -1,7 +1,7 @@
 """
 An example flow that runs as an Armada job on a local dev cluster.
 
-Prerequisites (see ../start-dev.sh, which sets all of this up):
+Prerequisites:
 
   - An Armada server reachable over gRPC, with a queue the worker may submit to
     (`prefect` by default).
