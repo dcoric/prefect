@@ -1,5 +1,6 @@
 import asyncio
 import datetime
+import sqlite3
 from typing import List
 from uuid import uuid4
 
@@ -2138,43 +2139,51 @@ class TestMarkDeploymentsReady:
                     timeout=0.5,
                 )
 
-    async def test_waits_out_a_concurrent_writer_on_sqlite(
+    async def test_sqlite_write_lock_is_held_before_reading(
         self,
         session: AsyncSession,
         deployment: orm_models.Deployment,
     ):
-        # SQLite ignores FOR UPDATE, so the transaction must begin in IMMEDIATE
-        # mode. Otherwise it reads under a shared lock and then upgrades to a
-        # write lock, which SQLite fails immediately with "database is locked"
-        # rather than waiting out `busy_timeout`.
+        # A concurrent connection committing a write between our read and
+        # our update must not fail the update with "database is locked".
+        # SQLite cannot upgrade a deferred (read) transaction to a write
+        # transaction once another writer has committed, so the transaction
+        # must start with the write lock (`BEGIN IMMEDIATE`) held.
         db = provide_database_interface()
         if db.dialect.name != "sqlite":
-            pytest.skip("Lock upgrades are a SQLite-only failure mode")
+            pytest.skip("Transaction begin mode is SQLite-only")
 
-        holding = asyncio.Event()
+        engine = await db.engine()
+        db_path = sa.make_url(db.database_config.connection_url).database
+        assert db_path
+        concurrent_writer_outcomes: list[str] = []
 
-        async def hold_the_write_lock() -> None:
-            async with db.session_context(
-                begin_transaction=True, with_for_update=True
-            ) as writer:
-                await writer.execute(
-                    sa.update(db.Deployment)
-                    .where(db.Deployment.id == deployment.id)
-                    .values(last_polled=now("UTC"))
-                )
-                holding.set()
-                await asyncio.sleep(0.5)
+        def commit_concurrent_write(conn, cursor, statement, *args, **kwargs):
+            if "UPDATE deployment SET" not in statement:
+                return
+            with sqlite3.connect(db_path, timeout=0.1) as writer:
+                try:
+                    writer.execute(
+                        "UPDATE deployment SET description = 'concurrent' WHERE id = ?",
+                        (str(deployment.id),),
+                    )
+                    concurrent_writer_outcomes.append("committed")
+                except sqlite3.OperationalError:
+                    concurrent_writer_outcomes.append("blocked")
 
-        writer_task = asyncio.create_task(hold_the_write_lock())
-        await holding.wait()
-
+        sa.event.listen(
+            engine.sync_engine, "before_cursor_execute", commit_concurrent_write
+        )
         try:
             await models.deployments.mark_deployments_ready(
                 db=db, deployment_ids=[deployment.id]
             )
         finally:
-            await writer_task
+            sa.event.remove(
+                engine.sync_engine, "before_cursor_execute", commit_concurrent_write
+            )
 
+        assert concurrent_writer_outcomes == ["blocked"]
         await session.refresh(deployment)
         assert deployment.status == DeploymentStatus.READY
 
