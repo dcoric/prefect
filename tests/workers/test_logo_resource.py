@@ -64,6 +64,21 @@ def logo_package(tmp_path, monkeypatch):
 
 
 class TestLoadPackagedLogo:
+    @pytest.mark.parametrize(
+        "resource",
+        ["C:/outside.svg", "C:outside.svg", "frontend/C:/outside.svg"],
+    )
+    def test_drive_qualified_paths_are_rejected_before_resource_lookup(
+        self, monkeypatch, resource
+    ):
+        def fail(package):
+            raise AssertionError("drive-qualified paths must not reach package lookup")
+
+        monkeypatch.setattr(_logo, "files", fail)
+        load_packaged_logo.cache_clear()
+
+        assert load_packaged_logo("any-package", resource) is None
+
     def test_svg_becomes_a_data_url_carrying_the_exact_bytes(self, logo_package):
         data_url = load_packaged_logo(logo_package, "frontend/logo.svg")
 

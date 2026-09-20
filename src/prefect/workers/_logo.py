@@ -32,7 +32,7 @@ MAX_LOGO_BYTES = 65_536
 _READ_LIMIT = MAX_LOGO_BYTES + 1
 
 # Only formats an `<img>` element renders without further processing. SVG loaded
-# through `<img>` renders in secure static mode, so no markup rewriting is done
+# through `<img>` disables scripting and external references, so no rewriting is done
 # here; the bytes are served exactly as the package shipped them.
 _MEDIA_TYPES = {
     ".svg": "image/svg+xml",
@@ -61,7 +61,8 @@ def _split_resource(resource: str) -> tuple[str, ...] | None:
         return None
 
     parts = tuple(resource.split("/"))
-    if any(part in ("", ".", "..") for part in parts):
+    # Colons can introduce a Windows drive even after a relative prefix.
+    if any(part in ("", ".", "..") or ":" in part for part in parts):
         return None
 
     name = parts[-1]
