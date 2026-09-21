@@ -10,8 +10,8 @@ const plainObject = z.custom<Record<string, unknown>>(isPlainObject);
 
 /**
  * The template is a JSON schema the schema form consumes whole, so only the
- * shape `WorkerBaseJobTemplate` declares is checked. Its contents — `$defs`,
- * `$ref`, defaults, and keywords this UI does not recognize — are carried
+ * shape `WorkerBaseJobTemplate` declares is checked. Its contents (`$defs`,
+ * `$ref`, defaults, and keywords this UI does not recognize) are carried
  * through untouched.
  */
 const workerBaseJobTemplate = z.custom<WorkerBaseJobTemplate>(
@@ -26,8 +26,8 @@ const workerBaseJobTemplate = z.custom<WorkerBaseJobTemplate>(
 const nonBlankString = z.string().refine((value) => value.trim().length > 0);
 
 /**
- * Optional presentation. `.catch` turns anything unusable — `null`, a number, a
- * blank string — into an absent value instead of failing the whole record, so
+ * Optional presentation. `.catch` turns anything unusable (`null`, a number, a
+ * blank string) into an absent value instead of failing the whole record, so
  * one bad field cannot hide an otherwise usable worker type.
  */
 const optionalText = nonBlankString.optional().catch(undefined);

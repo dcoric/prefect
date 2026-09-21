@@ -141,8 +141,8 @@ class ArmadaWorker(BaseWorker[...]):
     _logo_resource = "frontend/armada.svg"
 ```
 
-`_logo_resource` names an image inside this package — see
-[`prefect_armada/frontend/`](prefect_armada/frontend/) — which the server reads and
+`_logo_resource` names an image inside this package (see
+[`prefect_armada/frontend/`](prefect_armada/frontend/)), which the server reads and
 serves as a data URL, so the logo does not depend on an external host being
 reachable from the browser. `_logo_url` stays as the fallback if the packaged file
 cannot be read.
